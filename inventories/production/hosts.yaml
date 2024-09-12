@@ -1,0 +1,61 @@
+# =============================================================================
+# hosts.yaml
+# Description: This file defines the inventory for Ansible, grouping hosts into 
+#              control-plane and node groups. The kube_cluster group combines both.
+# =============================================================================
+
+all:
+  children:
+
+    # =============================================================================
+    # Control Plane Group
+    # This group contains the master nodes of the Kubernetes cluster, where the 
+    # control plane components run.
+    # =============================================================================
+    control-plane:
+      hosts:
+        master-1:
+          ansible_host: 192.168.10.10  # IP address for master-1 node
+          ansible_port: 22             # SSH port for the node (default SSH port)
+          ansible_user: vagrant        # User for SSH connection
+          ansible_ssh_private_key_file: /path/to/vagrant/.vagrant/machines/master-1/virtualbox/private_key
+          # Private key file to connect via SSH to master-1
+
+        master-2:
+          ansible_host: 192.168.10.11  # IP address for master-2 node
+          ansible_port: 22             # SSH port for the node (default SSH port)
+          ansible_user: vagrant        # User for SSH connection
+          ansible_ssh_private_key_file: /path/to/vagrant/.vagrant/machines/master-2/virtualbox/private_key
+          # Private key file to connect via SSH to master-2
+
+    # =============================================================================
+    # Node Group
+    # This group contains the worker nodes of the Kubernetes cluster, where
+    # applications will run.
+    # =============================================================================
+    node:
+      hosts:
+        node-1:
+          ansible_host: 192.168.11.10  # IP address for node-1
+          ansible_port: 22             # SSH port for the node (default SSH port)
+          ansible_user: vagrant        # User for SSH connection
+          ansible_ssh_private_key_file: /path/to/vagrant/.vagrant/machines/node-1/virtualbox/private_key
+          # Private key file to connect via SSH to node-1
+
+        node-2:
+          ansible_host: 192.168.11.11  # IP address for node-2
+          ansible_port: 22             # SSH port for the node (default SSH port)
+          ansible_user: vagrant        # User for SSH connection
+          ansible_ssh_private_key_file: /path/to/vagrant/.vagrant/machines/node-2/virtualbox/private_key
+          # Private key file to connect via SSH to node-2
+
+  # =============================================================================
+  # k3s_cluster Group
+  # This group contains both control-plane and node groups, representing the entire
+  # k3s Kubernetes cluster.
+  # =============================================================================
+  groups:
+    kube_cluster:
+      children:
+        control-plane: {}  # Inherit control-plane hosts into the k3s_cluster group
+        node: {}           # Inherit node hosts into the k3s_cluster group

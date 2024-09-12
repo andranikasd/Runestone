@@ -1,0 +1,184 @@
+---
+# =============================================================================
+# Role: prerequisites/security
+# File: tasks/main.yaml
+# Description: This task file configures the necessary OS-level security settings 
+#              based on kube-bench security best practices. The settings aim to 
+#              harden the system for running Kubernetes securely.
+# Author: Andranik Grigoryan
+# Version: v0.0.1
+# =============================================================================
+
+# =============================================================================
+# TASK BLOCK 1: Ensure Secure File Permissions
+# This section ensures that sensitive files have correct ownership and permissions
+# to protect system configurations and credentials from unauthorized access.
+# =============================================================================
+
+- name: Ensure permissions on /etc/kubernetes directory are set to 700
+  file:
+    path: /etc/kubernetes
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+  tags: security
+  # /etc/kubernetes directory holds sensitive configurations; it should only be 
+  # accessible by the root user to prevent unauthorized access.
+
+- name: Ensure permissions on /etc/kubernetes/pki directory are set to 700
+  file:
+    path: /etc/kubernetes/pki
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+  tags: security
+  # The PKI (Public Key Infrastructure) directory contains certificates and keys 
+  # for securing Kubernetes; it must be protected with restricted access.
+
+# =============================================================================
+# TASK BLOCK 2: Disable Unnecessary Services
+# This section disables services that are unnecessary for Kubernetes, reducing 
+# the attack surface by minimizing the number of services running on the system.
+# =============================================================================
+
+- name: Disable unused services (Ubuntu specific)
+  systemd:
+    name: "{{ item }}"
+    enabled: false
+    state: stopped
+  loop:
+    - avahi-daemon   # Service discovery protocol, not required in most Kubernetes setups
+    - cups           # Printing service, unnecessary on a Kubernetes node
+    - bluetooth      # Bluetooth service, not required for a Kubernetes node
+  tags: security
+  # Disabling unnecessary services reduces the attack surface by ensuring only essential
+  # services for Kubernetes are running on the node.
+
+# =============================================================================
+# TASK BLOCK 3: Ensure Secure Sysctl Parameters
+# This section ensures that important kernel parameters are configured to enhance
+# security on the system by restricting unnecessary features and protecting the
+# system from common attack vectors.
+# =============================================================================
+
+- name: Ensure IP forwarding is disabled (unless required)
+  sysctl:
+    name: net.ipv4.ip_forward
+    value: 0
+    state: present
+  tags: security
+  when: kube_ip_forward_needed is not defined or kube_ip_forward_needed == false
+  # Disabling IP forwarding improves system security by ensuring the system isn't 
+  # routing packets unless required by Kubernetes.
+
+- name: Ensure packet redirects are disabled
+  sysctl:
+    name: "{{ item }}"
+    value: 0
+    state: present
+  loop:
+    - net.ipv4.conf.all.send_redirects
+    - net.ipv4.conf.default.send_redirects
+  tags: security
+  # Disabling packet redirects helps prevent MITM attacks by ensuring the system does 
+  # not send ICMP redirects, which can be exploited.
+
+- name: Ensure source-routed packets are disabled
+  sysctl:
+    name: "{{ item }}"
+    value: 0
+    state: present
+  loop:
+    - net.ipv4.conf.all.accept_source_route
+    - net.ipv4.conf.default.accept_source_route
+  tags: security
+  # Source-routed packets allow the sender to specify the route the packet should take. 
+  # Disabling this improves security by preventing attackers from forcing specific routes.
+
+# =============================================================================
+# TASK BLOCK 4: Set File Integrity Monitoring
+# This section sets up basic file integrity monitoring by ensuring key system files
+# are checked periodically for unauthorized changes. This enhances security by 
+# allowing detection of tampering or unauthorized modifications.
+# =============================================================================
+
+- name: Install auditd for file monitoring (Ubuntu specific)
+  apt:
+    name: auditd
+    state: present
+  tags: security
+  # The auditd service tracks system-level changes, such as modifications to sensitive files,
+  # making it a key tool for detecting unauthorized changes.
+
+- name: Ensure audit rules are configured to monitor /etc/kubernetes
+  lineinfile:
+    path: /etc/audit/rules.d/audit.rules
+    line: "-w /etc/kubernetes -p wa -k kubernetes"
+    create: yes
+  tags: security
+  # This rule ensures that any modifications to the /etc/kubernetes directory 
+  # are logged, which helps in detecting potential tampering or misconfigurations.
+
+- name: Reload auditd rules
+  command: service auditd reload
+  tags: security
+  # Reload the auditd rules to apply any changes made to the file integrity monitoring configuration.
+
+# =============================================================================
+# TASK BLOCK 5: Configure SELinux (if enabled)
+# This section checks if SELinux is enabled and configures it for Kubernetes best practices.
+# SELinux helps control access to system resources and enforces security policies.
+# =============================================================================
+
+- name: Ensure SELinux is enforcing (for supported distros)
+  command: setenforce 1
+  when: ansible_selinux.status == "enabled"
+  tags: security
+  # Enforcing SELinux ensures that the system is using Mandatory Access Controls (MAC) 
+  # to control access to resources, adding an additional layer of security.
+
+- name: Ensure SELinux policy is set to enforcing
+  lineinfile:
+    path: /etc/selinux/config
+    regexp: '^SELINUX='
+    line: 'SELINUX=enforcing'
+  when: ansible_selinux.status == "enabled"
+  tags: security
+  # Ensures that SELinux is enabled and enforcing on reboot for enhanced security.
+
+# =============================================================================
+# TASK BLOCK 6: Ensure Secure SSH Configuration
+# This section ensures that the SSH service is securely configured to reduce attack
+# surface and prevent unauthorized remote access.
+# =============================================================================
+
+- name: Ensure SSH root login is disabled
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^PermitRootLogin'
+    line: 'PermitRootLogin no'
+  tags: ssh security
+  # Disabling root login via SSH reduces the likelihood of brute force attacks 
+  # by ensuring that the root account cannot be accessed remotely.
+
+- name: Ensure password-based login is disabled for SSH
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^PasswordAuthentication'
+    line: 'PasswordAuthentication no'
+  tags: ssh security
+  # Disabling password-based login forces the use of key-based authentication, 
+  # which is far more secure and prevents brute-force password attacks.
+
+- name: Reload SSH service to apply changes
+  systemd:
+    name: sshd
+    state: restarted
+  tags: ssh security
+  # Restart SSH to apply the configuration changes.
+
+# =============================================================================
+# END OF TASKS
+# =============================================================================

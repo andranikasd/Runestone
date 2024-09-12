@@ -1,0 +1,156 @@
+---
+# =============================================================================
+# Role: prerequisites/ubuntu
+# File: tasks/main.yaml
+# Description: This task file installs and configures the necessary Ubuntu-specific 
+#              prerequisites for running k0s. It focuses on the required kernel modules, 
+#              system packages, and sysctl configurations for Ubuntu.
+# Author: Andranik Grigoryan
+# Version: v0.0.1
+# =============================================================================
+
+# =============================================================================
+# TASK BLOCK 1: Update and Upgrade System Packages
+# Ensures the package repository is up-to-date and that all installed packages 
+# are upgraded to the latest available version.
+# =============================================================================
+
+- name: Update apt package index (Ubuntu specific)
+  apt:
+    update_cache: yes  # Refreshes the package index for Ubuntu's apt package manager
+    cache_valid_time: 3600  # Cache is valid for 1 hour
+  tags: update
+
+- name: Upgrade all installed packages (Ubuntu specific)
+  apt:
+    upgrade: dist  # Perform a full distribution upgrade on Ubuntu
+  tags: upgrade
+  # On Ubuntu, keeping packages up-to-date is crucial for system stability, especially
+  # when using kernel-dependent features like Kubernetes.
+
+# =============================================================================
+# TASK BLOCK 2: Install Required Ubuntu Packages
+# Installs all necessary system tools and utilities that are required by k0s on Ubuntu.
+# This includes networking, container runtime, and management tools.
+# =============================================================================
+
+- name: Install required packages for k0s (Ubuntu specific)
+  apt:
+    name:
+      - curl          # Used to fetch binaries and data from URLs
+      - git           # Version control tool, sometimes needed for configuration management
+      - socat         # Utility needed for Kubernetes port forwarding
+      - conntrack     # Required for network connection tracking
+      - iptables      # Required for network traffic rules in Kubernetes
+      - ebtables      # Used for bridge filtering, necessary for network bridging
+      - ethtool       # Utility for managing network interfaces
+      - mount         # Required by kubelet for mounting file systems
+      - umount        # Required to unmount filesystems during pod destruction
+      - useradd       # Creates system users, needed for k0s user management
+      - iputils-ping  # Network utility often used in pre-flight checks
+    state: present
+  tags: prerequisites
+  # These packages are Ubuntu-specific and are critical for networking, system configuration,
+  # and Kubernetes functionality.
+
+# =============================================================================
+# TASK BLOCK 3: Load and Persist Kernel Modules for Ubuntu
+# This section loads the required kernel modules for Kubernetes and ensures that they
+# are persisted across reboots. On Ubuntu, these modules must be enabled for proper networking.
+# =============================================================================
+
+- name: Load br_netfilter kernel module (Ubuntu specific)
+  modprobe:
+    name: br_netfilter
+    state: present
+  tags: kernel
+  # On Ubuntu, the br_netfilter module is required to ensure proper Kubernetes
+  # networking with iptables.
+
+- name: Load required kernel modules for cgroups (Ubuntu specific)
+  modprobe:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - cgroup
+    - cgroup_freezer
+    - cgroup_pids
+    - cgroup_device
+    - cpuset
+    - cpu_cgroup
+    - memory_cgroup
+    - namespaces
+    - netfilter
+    - ext4
+  tags: kernel
+  # These Ubuntu-specific kernel modules are necessary for managing control groups,
+  # containers, and network namespaces.
+
+- name: Persist kernel modules across reboots (Ubuntu specific)
+  copy:
+    dest: /etc/modules-load.d/k0s.conf
+    content: |
+      br_netfilter
+      cgroup
+      cgroup_freezer
+      cgroup_pids
+      cgroup_device
+      cpuset
+      cpu_cgroup
+      memory_cgroup
+      namespaces
+      netfilter
+      ext4
+  tags: kernel
+  # Persist these kernel modules so that they are automatically loaded upon reboot
+  # on Ubuntu systems.
+
+# =============================================================================
+# TASK BLOCK 4: Configure Ubuntu Sysctl Settings
+# Configures sysctl settings specific to Ubuntu to ensure that the network traffic
+# is properly routed and that IP forwarding is enabled, which is essential for
+# Kubernetes pod communication.
+# =============================================================================
+
+- name: Configure sysctl settings for k0s (Ubuntu specific)
+  sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    state: present
+  loop:
+    - { name: 'net.bridge.bridge-nf-call-iptables', value: 1 }  # Enable iptables for bridged networks
+    - { name: 'net.ipv4.ip_forward', value: 1 }  # Enable IP forwarding on Ubuntu
+  tags: networking
+  # These sysctl settings ensure that bridged network traffic is processed by iptables
+  # and that Ubuntu forwards packets between interfaces, both required for Kubernetes networking.
+
+- name: Apply sysctl changes (Ubuntu specific)
+  command: sysctl --system
+  tags: networking
+  # Applying sysctl changes immediately on Ubuntu without needing a reboot.
+
+# =============================================================================
+# TASK BLOCK 5: Configure /etc/hosts for Localhost Resolution on Ubuntu
+# Since k0s is statically linked against musl libc, we ensure that localhost is properly
+# resolved on Ubuntu systems by configuring /etc/hosts manually.
+# =============================================================================
+
+- name: Add IPv4 localhost to /etc/hosts (Ubuntu specific)
+  lineinfile:
+    path: /etc/hosts
+    line: "127.0.0.1 localhost"
+    state: present
+  tags: dns
+  # Ensuring that the IPv4 localhost entry is present in /etc/hosts on Ubuntu.
+
+- name: Add IPv6 localhost to /etc/hosts (Ubuntu specific)
+  lineinfile:
+    path: /etc/hosts
+    line: "::1 localhost"
+    state: present
+  tags: dns
+  # Ensuring that the IPv6 localhost entry is present in /etc/hosts on Ubuntu.
+
+# =============================================================================
+# END OF TASKS
+# =============================================================================

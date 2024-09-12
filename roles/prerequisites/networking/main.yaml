@@ -1,0 +1,107 @@
+---
+# =============================================================================
+# Role: prerequisites/networking
+# File: tasks/main.yaml
+# Description: This task file configures the networking requirements for the k0s 
+#              homelab, ensuring necessary ports, protocols, and firewall rules 
+#              are set to support communication between controller and worker nodes.
+# Author: Andranik Grigoryan
+# Version: v0.0.1
+# =============================================================================
+
+# =============================================================================
+# TASK BLOCK 1: Ensure Required TCP/UDP Ports Are Open
+# This section ensures that the necessary TCP/UDP ports required by k0s are opened
+# to allow communication between controller and worker nodes.
+# Ports and protocols are defined in `vars/main.yml` for flexibility.
+# =============================================================================
+
+- name: Ensure required TCP ports are open
+  firewalld:
+    port: "{{ item }}/tcp"
+    permanent: true
+    state: enabled
+    immediate: true
+    zone: "{{ firewalld_zone }}"
+  loop: "{{ k0s_required_tcp_ports }}"
+  tags: networking
+  # Ports like etcd (2380), Kube-API (6443), Konnectivity (8132) are critical for 
+  # communication between nodes. All ports are configurable via variables.
+
+- name: Ensure required UDP ports are open
+  firewalld:
+    port: "{{ item }}/udp"
+    permanent: true
+    state: enabled
+    immediate: true
+    zone: "{{ firewalld_zone }}"
+  loop: "{{ k0s_required_udp_ports }}"
+  tags: networking
+  # This ensures the UDP ports, such as Calico's VXLAN (4789), are open for worker communication.
+
+# =============================================================================
+# TASK BLOCK 2: Configure Firewall Rules for Pod and Service CIDRs
+# This section configures firewall rules to allow traffic between nodes using the 
+# podCIDR and serviceCIDR defined in the k0s configuration.
+# =============================================================================
+
+- name: Allow traffic for Pod CIDR
+  firewalld:
+    source: "{{ k0s_pod_cidr }}"
+    zone: "{{ firewalld_zone }}"
+    state: enabled
+    permanent: true
+    immediate: true
+  tags: networking
+  # The podCIDR is the subnet used by Kubernetes to allocate IPs for pods. Ensure 
+  # traffic is allowed between nodes using this subnet.
+
+- name: Allow traffic for Service CIDR
+  firewalld:
+    source: "{{ k0s_service_cidr }}"
+    zone: "{{ firewalld_zone }}"
+    state: enabled
+    permanent: true
+    immediate: true
+  tags: networking
+  # The serviceCIDR is the subnet used for internal Kubernetes services.
+
+# =============================================================================
+# TASK BLOCK 3: Enable IP Forwarding and Set Networking Options
+# This section ensures that IP forwarding is enabled, and necessary sysctl options
+# for networking are set, especially for pods to communicate with each other.
+# =============================================================================
+
+- name: Ensure IP forwarding is enabled
+  sysctl:
+    name: net.ipv4.ip_forward
+    value: 1
+    state: present
+  tags: networking
+  # IP forwarding is required for routing traffic between containers in different subnets.
+
+- name: Configure sysctl for bridge network traffic
+  sysctl:
+    name: net.bridge.bridge-nf-call-iptables
+    value: 1
+    state: present
+  tags: networking
+  # This ensures that bridged network traffic is properly routed through iptables.
+
+# =============================================================================
+# TASK BLOCK 4: Verify Firewalld Configuration
+# This task verifies the firewalld configuration to ensure all required rules and 
+# ports are properly set up for k0s networking.
+# =============================================================================
+
+- name: Verify firewalld configuration
+  command: firewall-cmd --list-all --zone="{{ firewalld_zone }}"
+  register: firewalld_output
+  changed_when: false
+  tags: verify
+  # This command outputs the current firewall rules to verify that the correct
+  # ports and CIDR ranges are allowed. It helps with troubleshooting.
+
+# =============================================================================
+# END OF TASKS
+# =============================================================================
