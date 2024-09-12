@@ -1,0 +1,100 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+NUM_MASTERS = (ENV['NUM_MASTERS'] || 1).to_i
+NUM_NODES = (ENV['NUM_NODES'] || 2).to_i
+BASE_IP_MASTER = ENV['BASE_IP_MASTER'] || "192.168.10."
+BASE_IP_NODE = ENV['BASE_IP_NODE'] || "192.168.11."
+IP_START = (ENV['IP_START'] || 10).to_i
+BOX_NAME = ENV['BOX_NAME'] || "generic/ubuntu2204"
+MASTER_MEMORY = (ENV['MASTER_MEMORY'] || 3000).to_i # Separate memory for masters
+NODE_MEMORY = (ENV['NODE_MEMORY'] || 3000).to_i     # Separate memory for nodes
+MASTER_CPUS = (ENV['MASTER_CPUS'] || 2).to_i         # Separate CPUs for masters
+NODE_CPUS = (ENV['NODE_CPUS'] || 4).to_i             # Separate CPUs for nodes
+DISK_SIZE = ENV['DISK_SIZE'] || "30GB"
+DISK_COUNT_PER_NODE = (ENV['DISK_COUNT_PER_NODE'] || 2).to_i
+DISK_MOUNT_COUNT = (ENV['DISK_MOUNT_COUNT'] || 1).to_i
+
+if DISK_MOUNT_COUNT > DISK_COUNT_PER_NODE
+  puts "DISK_MOUNT_COUNT is greater than DISK_COUNT_PER_NODE. Exiting..."
+  exit(1)
+elsif DISK_MOUNT_COUNT > 25
+  puts "Disk mount count can't be greater than 25."
+  exit(2)
+end
+
+def configure_node(config, i, node_type, ip, script, memory, cpus)
+  config.vm.define "#{node_type}-#{i}" do |node|
+    node.vm.hostname = "#{node_type}-#{i}"
+    node.vm.network "private_network", ip: ip, :netmask => "255.255.252.0", virtualbox__intnet: false
+    node.vm.network "forwarded_port", guest: 22, host: "#{2700 + i + (node_type == 'node' ? 10 : 0)}"
+
+    if node_type == 'node'
+      DISK_COUNT_PER_NODE.times do |d|
+        node.vm.disk :disk, size: DISK_SIZE, name: "extra_storage-#{i}-#{d}"
+        node.vm.provision "shell", path: "scripts/node.sh", env: {
+          DISK_MOUNT_COUNT: DISK_MOUNT_COUNT,
+          DISK_COUNT_PER_NODE: DISK_COUNT_PER_NODE
+        }
+      end
+    end
+
+    node.vm.provider "virtualbox" do |vb|
+        vb.name = "#{node_type}-#{i}"
+        vb.memory = memory
+        vb.cpus = cpus
+    end
+    (1..NUM_MASTERS).each do |j|
+        node.vm.provision "shell", inline: <<-SHELL
+          echo "#{BASE_IP_MASTER}#{IP_START + j} master-#{j}" | sudo tee -a /etc/hosts
+        SHELL
+          
+      end
+  
+      (1..NUM_NODES).each do |j|
+        node.vm.provision "shell", inline: <<-SHELL
+          echo "#{BASE_IP_NODE}#{IP_START + j} node-#{j}" | sudo tee -a /etc/hosts
+        SHELL
+      end
+  
+  end
+end
+
+Vagrant.configure("2") do |config|
+
+  config.vm.box = BOX_NAME
+  config.vm.box_check_update = true
+
+  (1..NUM_MASTERS).each do |i|
+    configure_node(config, i, 'master', BASE_IP_MASTER + "#{IP_START + i}", 'master', MASTER_MEMORY, MASTER_CPUS)
+  end
+
+  (1..NUM_NODES).each do |l|
+    configure_node(config, l, 'node', BASE_IP_NODE + "#{IP_START + l}", 'node', NODE_MEMORY, NODE_CPUS)
+  end
+
+  vagrant_root = File.dirname(__FILE__)
+
+  config.vm.synced_folder ".", "/vagrant"
+  config.vm.provision "shell", privileged: true, inline: <<-SHELL
+    mv /tmp/aliases.sh /etc/profile.d/aliases.sh
+    chmod +x /etc/profile.d/aliases.sh
+  SHELL
+  config.vm.provision :shell, :inline => "sudo rm /etc/localtime && sudo ln -s /usr/share/zoneinfo/America/New_York /etc/localtime", run: "always"
+  config.vm.provision "shell", env: {"VAGRANT_ROOT" => vagrant_root}, inline: <<-SHELL
+    sudo debconf-set-selections <<< 'debconf debconf/frontend select Noninteractive'
+    echo "[master]" > /vagrant/hosts.ini
+    for i in $(seq 1 #{NUM_MASTERS}); do
+      echo "master-${i} ansible_host=#{BASE_IP_MASTER}$(expr #{IP_START} + ${i}) ansible_port=22 ansible_user=vagrant ansible_ssh_private_key_file=${VAGRANT_ROOT}/.vagrant/machines/master-${i}/virtualbox/private_key ansible_ssh_common_args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'" >> /vagrant/hosts.ini
+    done
+
+    echo "[node]" >> /vagrant/hosts.ini
+    for i in $(seq 1 #{NUM_NODES}); do
+      echo "node-${i} ansible_host=#{BASE_IP_NODE}$(expr #{IP_START} + ${i}) ansible_port=22 ansible_user=vagrant ansible_ssh_private_key_file=${VAGRANT_ROOT}/.vagrant/machines/node-${i}/virtualbox/private_key ansible_ssh_common_args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'" >> /vagrant/hosts.ini
+    done
+
+    echo "[k3s_cluster:children]" >> /vagrant/hosts.ini
+    echo "master" >> /vagrant/hosts.ini
+    echo "node" >> /vagrant/hosts.ini
+  SHELL
+end
